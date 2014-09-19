@@ -180,7 +180,7 @@ static int tcp_listener(void) {
     return 1;
   }
 
-  r = uv_tcp_bind(&tcpServer, (const struct sockaddr*) &addr);
+  r = uv_tcp_bind(&tcpServer, (const struct sockaddr*) &addr, 0);
   if (r) {
     fprintf(stderr, "Bind error\n");
     return 1;
@@ -352,6 +352,9 @@ TEST_IMPL(getsockname_udp) {
   uv_run(loop, UV_RUN_DEFAULT);
 
   ASSERT(getsocknamecount == 2);
+
+  ASSERT(udp.send_queue_size == 0);
+  ASSERT(udpServer.send_queue_size == 0);
 
   MAKE_VALGRIND_HAPPY();
   return 0;

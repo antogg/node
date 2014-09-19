@@ -1,10 +1,12 @@
-# libuv
+![libuv][libuv_banner]
+
+## Overview
 
 libuv is a multi-platform support library with a focus on asynchronous I/O. It
 was primarily developed for use by [Node.js](http://nodejs.org), but it's also
 used by Mozilla's [Rust language](http://www.rust-lang.org/),
 [Luvit](http://luvit.io/), [Julia](http://julialang.org/),
-[pyuv](https://crate.io/packages/pyuv/), and others.
+[pyuv](https://github.com/saghul/pyuv), and [others](https://github.com/joyent/libuv/wiki/Projects-that-use-libuv).
 
 ## Feature highlights
 
@@ -41,12 +43,14 @@ used by Mozilla's [Rust language](http://www.rust-lang.org/),
 
  * [include/uv.h](https://github.com/joyent/libuv/blob/master/include/uv.h)
    &mdash; API documentation in the form of detailed header comments.
- * [An Introduction to libuv](http://nikhilm.github.com/uvbook/) &mdash; An
-   overview of libuv with tutorials.
- * [LXJS 2012 talk](http://www.youtube.com/watch?v=nGn60vDSxQ4) - High-level
-   introductory talk about libuv.
- * [Tests and benchmarks](https://github.com/joyent/libuv/tree/master/test) -
-   API specification and usage examples.
+ * [An Introduction to libuv](http://nikhilm.github.com/uvbook/)
+   &mdash; An overview of libuv with tutorials.
+ * [LXJS 2012 talk](http://www.youtube.com/watch?v=nGn60vDSxQ4)
+   &mdash; High-level introductory talk about libuv.
+ * [Tests and benchmarks](https://github.com/joyent/libuv/tree/master/test)
+   &mdash; API specification and usage examples.
+ * [libuv-dox](https://github.com/thlorenz/libuv-dox)
+   &mdash; Documenting types and methods of libuv, mostly by reading uv.h.
 
 ## Build Instructions
 
@@ -64,10 +68,9 @@ To build with autotools:
 
 ### Windows
 
-First, Python 2.6 or 2.7 must be installed as it is required by [GYP][].
-
-Also, the directory for the preferred Python executable must be specified
-by the `PYTHON` or `Path` environment variables.
+First, [Python][] 2.6 or 2.7 must be installed as it is required by [GYP][].
+If python is not in your path set the environment variable `PYTHON` to its
+location. For example: `set PYTHON=C:\Python27\python.exe`
 
 To build with Visual Studio, launch a git shell (e.g. Cmd or PowerShell)
 and run vcbuild.bat which will checkout the GYP code into build/gyp and
@@ -91,7 +94,14 @@ Run:
 Run:
 
     $ ./gyp_uv.py -f xcode
-    $ xcodebuild -project uv.xcodeproj -configuration Release -target All
+    $ xcodebuild -ARCHS="x86_64" -project uv.xcodeproj \
+         -configuration Release -target All
+
+Note to OS X users:
+
+Make sure that you specify the architecture you wish to build for in the
+"ARCHS" flag. You can specify more than one by delimiting with a space
+(e.g. "x86_64 i386").
 
 ### Android
 
@@ -124,11 +134,13 @@ OS X using the GCC or XCode toolchain.
 
 Solaris 121 and later using GCC toolchain.
 
-## patches
+## Patches
 
 See the [guidelines for contributing][].
 
 [node.js]: http://nodejs.org/
 [GYP]: http://code.google.com/p/gyp/
+[Python]: https://www.python.org/downloads/
 [Visual Studio Express 2010]: http://www.microsoft.com/visualstudio/eng/products/visual-studio-2010-express
 [guidelines for contributing]: https://github.com/joyent/libuv/blob/master/CONTRIBUTING.md
+[libuv_banner]: https://raw.githubusercontent.com/joyent/libuv/master/img/banner.png

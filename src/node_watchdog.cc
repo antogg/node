@@ -20,6 +20,8 @@
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "node_watchdog.h"
+#include "env.h"
+#include "env-inl.h"
 #include "util.h"
 #include <assert.h>
 
@@ -28,21 +30,25 @@ namespace node {
 using v8::V8;
 
 
-Watchdog::Watchdog(uint64_t ms) : destroyed_(false) {
-  loop_ = uv_loop_new();
+Watchdog::Watchdog(Environment* env, uint64_t ms) : env_(env),
+                                                    destroyed_(false) {
+  int rc;
+  loop_ = new uv_loop_t;
   CHECK(loop_);
+  rc = uv_loop_init(loop_);
+  CHECK_EQ(0, rc);
 
-  int rc = uv_async_init(loop_, &async_, &Watchdog::Async);
-  CHECK(0 == rc);  // NOLINT(readability/check)
+  rc = uv_async_init(loop_, &async_, &Watchdog::Async);
+  CHECK_EQ(0, rc);
 
   rc = uv_timer_init(loop_, &timer_);
-  CHECK(0 == rc);  // NOLINT(readability/check)
+  CHECK_EQ(0, rc);
 
   rc = uv_timer_start(&timer_, &Watchdog::Timer, ms, 0);
-  CHECK(0 == rc);  // NOLINT(readability/check)
+  CHECK_EQ(0, rc);
 
   rc = uv_thread_create(&thread_, &Watchdog::Run, this);
-  CHECK(0 == rc);  // NOLINT(readability/check)
+  CHECK_EQ(0, rc);
 }
 
 
@@ -69,7 +75,10 @@ void Watchdog::Destroy() {
   // UV_RUN_DEFAULT so that libuv has a chance to clean up.
   uv_run(loop_, UV_RUN_DEFAULT);
 
-  uv_loop_delete(loop_);
+  int rc = uv_loop_close(loop_);
+  CHECK_EQ(0, rc);
+  delete loop_;
+  loop_ = NULL;
 
   destroyed_ = true;
 }
@@ -87,12 +96,13 @@ void Watchdog::Run(void* arg) {
 }
 
 
-void Watchdog::Async(uv_async_t* async, int status) {
+void Watchdog::Async(uv_async_t* async) {
 }
 
 
-void Watchdog::Timer(uv_timer_t* timer, int status) {
-  V8::TerminateExecution();
+void Watchdog::Timer(uv_timer_t* timer) {
+  Watchdog* w = ContainerOf(&Watchdog::timer_, timer);
+  V8::TerminateExecution(w->env()->isolate());
 }
 
 

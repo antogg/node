@@ -54,20 +54,19 @@ static void close_cb(uv_handle_t* handle) {
 
 
 static void connect_cb(uv_connect_t* req, int status) {
-  static char zeroes[1024];
   int r;
   uv_buf_t buf;
   ASSERT(status == 0);
   connect_cb_called++;
 
   do {
-    r = uv_try_write((uv_stream_t*) &client, zeroes, sizeof(zeroes));
-    ASSERT(r >= 0);
-    bytes_written += r;
-
-    /* Partial write */
-    if (r != (int) sizeof(zeroes))
+    buf = uv_buf_init("PING", 4);
+    r = uv_try_write((uv_stream_t*) &client, &buf, 1);
+    ASSERT(r > 0 || r == UV_EAGAIN);
+    if (r > 0) {
+      bytes_written += r;
       break;
+    }
   } while (1);
   uv_close((uv_handle_t*) &client, close_cb);
 }
@@ -109,7 +108,7 @@ static void start_server(void) {
   ASSERT(0 == uv_ip4_addr("0.0.0.0", TEST_PORT, &addr));
 
   ASSERT(0 == uv_tcp_init(uv_default_loop(), &server));
-  ASSERT(0 == uv_tcp_bind(&server, (struct sockaddr*) &addr));
+  ASSERT(0 == uv_tcp_bind(&server, (struct sockaddr*) &addr, 0));
   ASSERT(0 == uv_listen((uv_stream_t*) &server, 128, connection_cb));
 }
 

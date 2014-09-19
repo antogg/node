@@ -37,6 +37,8 @@ typedef class ReqWrap<uv_shutdown_t> ShutdownWrap;
 
 class WriteWrap: public ReqWrap<uv_write_t> {
  public:
+  // TODO(trevnorris): WrapWrap inherits from ReqWrap, which I've globbed
+  // into the same provider. How should these be broken apart?
   WriteWrap(Environment* env, v8::Local<v8::Object> obj, StreamWrap* wrap)
       : ReqWrap<uv_write_t>(env, obj),
         wrap_(wrap) {
@@ -73,6 +75,10 @@ class StreamWrapCallbacks {
   virtual ~StreamWrapCallbacks() {
   }
 
+  virtual const char* Error();
+
+  virtual int TryWrite(uv_buf_t** bufs, size_t* count);
+
   virtual int DoWrite(WriteWrap* w,
                       uv_buf_t* bufs,
                       size_t count,
@@ -99,9 +105,10 @@ class StreamWrapCallbacks {
 
 class StreamWrap : public HandleWrap {
  public:
-  void OverrideCallbacks(StreamWrapCallbacks* callbacks) {
+  void OverrideCallbacks(StreamWrapCallbacks* callbacks, bool gc) {
     StreamWrapCallbacks* old = callbacks_;
     callbacks_ = callbacks;
+    callbacks_gc_ = gc;
     if (old != &default_callbacks_)
       delete old;
   }
@@ -119,6 +126,10 @@ class StreamWrap : public HandleWrap {
   static void WriteAsciiString(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void WriteUtf8String(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void WriteUcs2String(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void WriteBinaryString(
+      const v8::FunctionCallbackInfo<v8::Value>& args);
+
+  static void SetBlocking(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   inline StreamWrapCallbacks* callbacks() const {
     return callbacks_;
@@ -146,13 +157,14 @@ class StreamWrap : public HandleWrap {
 
   StreamWrap(Environment* env,
              v8::Local<v8::Object> object,
-             uv_stream_t* stream);
+             uv_stream_t* stream,
+             AsyncWrap::ProviderType provider);
 
   ~StreamWrap() {
-    if (callbacks_ != &default_callbacks_) {
+    if (!callbacks_gc_ && callbacks_ != &default_callbacks_) {
       delete callbacks_;
-      callbacks_ = NULL;
     }
+    callbacks_ = NULL;
   }
 
   void StateChange() { }
@@ -169,10 +181,6 @@ class StreamWrap : public HandleWrap {
   static void OnRead(uv_stream_t* handle,
                      ssize_t nread,
                      const uv_buf_t* buf);
-  static void OnRead2(uv_pipe_t* handle,
-                      ssize_t nread,
-                      const uv_buf_t* buf,
-                      uv_handle_type pending);
   static void OnReadCommon(uv_stream_t* handle,
                            ssize_t nread,
                            const uv_buf_t* buf,
@@ -184,6 +192,7 @@ class StreamWrap : public HandleWrap {
   uv_stream_t* const stream_;
   StreamWrapCallbacks default_callbacks_;
   StreamWrapCallbacks* callbacks_;  // Overridable callbacks
+  bool callbacks_gc_;
 
   friend class StreamWrapCallbacks;
 };

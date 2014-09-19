@@ -26,6 +26,7 @@ var assert = require('assert'),
     isIP = net.isIP,
     isIPv4 = net.isIPv4,
     isIPv6 = net.isIPv6;
+var util = require('util');
 
 var expected = 0,
     completed = 0,
@@ -61,7 +62,6 @@ function TEST(f) {
 function checkWrap(req) {
   assert.ok(typeof req === 'object');
 }
-
 
 TEST(function test_resolve4(done) {
   var req = dns.resolve4('www.google.com', function(err, ips) {
@@ -244,6 +244,40 @@ TEST(function test_resolveNaptr(done) {
   checkWrap(req);
 });
 
+TEST(function test_resolveSoa(done) {
+  var req = dns.resolveSoa('nodejs.org', function(err, result) {
+    if (err) throw err;
+    
+    assert.ok(result);
+    assert.ok(typeof result === 'object');
+    
+    assert.ok(typeof result.nsname === 'string');
+    assert.ok(result.nsname.length > 0);
+    
+    assert.ok(typeof result.hostmaster === 'string');
+    assert.ok(result.hostmaster.length > 0);
+    
+    assert.ok(typeof result.serial === 'number');
+    assert.ok((result.serial > 0) && (result.serial < 4294967295));
+    
+    assert.ok(typeof result.refresh === 'number');
+    assert.ok((result.refresh > 0) && (result.refresh < 2147483647)); 
+    
+    assert.ok(typeof result.retry === 'number');
+    assert.ok((result.retry > 0) && (result.retry < 2147483647));
+    
+    assert.ok(typeof result.expire === 'number');
+    assert.ok((result.expire > 0) && (result.expire < 2147483647));
+    
+    assert.ok(typeof result.minttl === 'number');
+    assert.ok((result.minttl >= 0) && (result.minttl < 2147483647));
+
+    done();
+  });
+  
+  checkWrap(req);
+});
+
 TEST(function test_resolveCname(done) {
   var req = dns.resolveCname('www.microsoft.com', function(err, names) {
     if (err) throw err;
@@ -267,7 +301,8 @@ TEST(function test_resolveTxt(done) {
   var req = dns.resolveTxt('google.com', function(err, records) {
     if (err) throw err;
     assert.equal(records.length, 1);
-    assert.equal(records[0].indexOf('v=spf1'), 0);
+    assert.ok(util.isArray(records[0]));
+    assert.equal(records[0][0].indexOf('v=spf1'), 0);
     done();
   });
 
@@ -301,6 +336,36 @@ TEST(function test_lookup_ipv4_implicit(done) {
 });
 
 
+TEST(function test_lookup_ipv4_explicit_object(done) {
+  var req = dns.lookup('www.google.com', {
+    family: 4
+  }, function(err, ip, family) {
+    if (err) throw err;
+    assert.ok(net.isIPv4(ip));
+    assert.strictEqual(family, 4);
+
+    done();
+  });
+
+  checkWrap(req);
+});
+
+
+TEST(function test_lookup_ipv4_hint_addrconfig(done) {
+  var req = dns.lookup('www.google.com', {
+    hints: dns.ADDRCONFIG
+  }, function(err, ip, family) {
+    if (err) throw err;
+    assert.ok(net.isIPv4(ip));
+    assert.strictEqual(family, 4);
+
+    done();
+  });
+
+  checkWrap(req);
+});
+
+
 TEST(function test_lookup_ipv6_explicit(done) {
   var req = dns.lookup('ipv6.google.com', 6, function(err, ip, family) {
     if (err) throw err;
@@ -314,8 +379,41 @@ TEST(function test_lookup_ipv6_explicit(done) {
 });
 
 
+/* This ends up just being too problematic to test
 TEST(function test_lookup_ipv6_implicit(done) {
   var req = dns.lookup('ipv6.google.com', function(err, ip, family) {
+    if (err) throw err;
+    assert.ok(net.isIPv6(ip));
+    assert.strictEqual(family, 6);
+
+    done();
+  });
+
+  checkWrap(req);
+});
+*/
+
+
+TEST(function test_lookup_ipv6_explicit_object(done) {
+  var req = dns.lookup('ipv6.google.com', {
+    family: 6
+  }, function(err, ip, family) {
+    if (err) throw err;
+    assert.ok(net.isIPv6(ip));
+    assert.strictEqual(family, 6);
+
+    done();
+  });
+
+  checkWrap(req);
+});
+
+
+TEST(function test_lookup_ipv6_hint(done) {
+  var req = dns.lookup('www.google.com', {
+    family: 6,
+    hints: dns.V4MAPPED
+  }, function(err, ip, family) {
     if (err) throw err;
     assert.ok(net.isIPv6(ip));
     assert.strictEqual(family, 6);
@@ -333,6 +431,7 @@ TEST(function test_lookup_failure(done) {
     assert.strictEqual(err.errno, dns.NOTFOUND);
     assert.strictEqual(err.errno, 'ENOTFOUND');
     assert.ok(!/ENOENT/.test(err.message));
+    assert.ok(/does\.not\.exist/.test(err.message));
 
     done();
   });
@@ -393,11 +492,83 @@ TEST(function test_lookup_localhost_ipv4(done) {
 });
 
 
+TEST(function test_lookupservice_ip_ipv4(done) {
+  var req = dns.lookupService('127.0.0.1', 80, function(err, host, service) {
+    if (err) throw err;
+    assert.ok(common.isValidHostname(host));
+
+    /*
+     * Retrieve the actual HTTP service name as setup on the host currently
+     * running the test by reading it from /etc/services. This is not ideal,
+     * as the service name lookup could use another mechanism (e.g nscd), but
+     * it's already better than hardcoding it.
+     */
+    var httpServiceName = common.getServiceName(80, 'tcp');
+    if (!httpServiceName) {
+      /*
+       * Couldn't find service name, reverting to the most sensible default
+       * for port 80.
+       */
+      httpServiceName = 'http';
+    }
+
+    assert.strictEqual(service, httpServiceName);
+
+    done();
+  });
+
+  checkWrap(req);
+});
+
+
+TEST(function test_lookupservice_ip_ipv6(done) {
+  var req = dns.lookupService('::1', 80, function(err, host, service) {
+    if (err) throw err;
+    assert.ok(common.isValidHostname(host));
+
+    /*
+     * Retrieve the actual HTTP service name as setup on the host currently
+     * running the test by reading it from /etc/services. This is not ideal,
+     * as the service name lookup could use another mechanism (e.g nscd), but
+     * it's already better than hardcoding it.
+     */
+    var httpServiceName = common.getServiceName(80, 'tcp');
+    if (!httpServiceName) {
+      /*
+       * Couldn't find service name, reverting to the most sensible default
+       * for port 80.
+       */
+      httpServiceName = 'http';
+    }
+
+    assert.strictEqual(service, httpServiceName);
+
+    done();
+  });
+
+  checkWrap(req);
+});
+
+
+TEST(function test_lookupservice_invalid(done) {
+  var req = dns.lookupService('1.2.3.4', 80, function(err, host, service) {
+    assert(err instanceof Error);
+    assert.strictEqual(err.code, 'ENOTFOUND');
+    assert.ok(/1\.2\.3\.4/.test(err.message));
+
+    done();
+  });
+
+  checkWrap(req);
+});
+
+
 TEST(function test_reverse_failure(done) {
   var req = dns.reverse('0.0.0.0', function(err) {
     assert(err instanceof Error);
     assert.strictEqual(err.code, 'ENOTFOUND');  // Silly error code...
     assert.strictEqual(err.hostname, '0.0.0.0');
+    assert.ok(/0\.0\.0\.0/.test(err.message));
 
     done();
   });
@@ -411,6 +582,7 @@ TEST(function test_lookup_failure(done) {
     assert(err instanceof Error);
     assert.strictEqual(err.code, 'ENOTFOUND');  // Silly error code...
     assert.strictEqual(err.hostname, 'nosuchhostimsure');
+    assert.ok(/nosuchhostimsure/.test(err.message));
 
     done();
   });
@@ -422,8 +594,18 @@ TEST(function test_lookup_failure(done) {
 TEST(function test_resolve_failure(done) {
   var req = dns.resolve4('nosuchhostimsure', function(err) {
     assert(err instanceof Error);
-    assert.strictEqual(err.code, 'ENOTFOUND');  // Silly error code...
+
+    switch(err.code) {
+      case 'ENOTFOUND':
+      case 'ESERVFAIL':
+        break;
+      default:
+        assert.strictEqual(err.code, 'ENOTFOUND');  // Silly error code...
+        break;
+    }
+
     assert.strictEqual(err.hostname, 'nosuchhostimsure');
+    assert.ok(/nosuchhostimsure/.test(err.message));
 
     done();
   });

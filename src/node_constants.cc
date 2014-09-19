@@ -33,7 +33,11 @@
 #include <sys/stat.h>
 
 #if HAVE_OPENSSL
+# include <openssl/ec.h>
 # include <openssl/ssl.h>
+# ifndef OPENSSL_NO_ENGINE
+#  include <openssl/engine.h>
+# endif  // !OPENSSL_NO_ENGINE
 #endif
 
 namespace node {
@@ -875,9 +879,110 @@ void DefineOpenSSLConstants(Handle<Object> target) {
     NODE_DEFINE_CONSTANT(target, SSL_OP_TLS_ROLLBACK_BUG);
 #endif
 
+# ifndef OPENSSL_NO_ENGINE
+
+# ifdef ENGINE_METHOD_DSA
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_DSA);
+# endif
+
+# ifdef ENGINE_METHOD_DH
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_DH);
+# endif
+
+# ifdef ENGINE_METHOD_RAND
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_RAND);
+# endif
+
+# ifdef ENGINE_METHOD_ECDH
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_ECDH);
+# endif
+
+# ifdef ENGINE_METHOD_ECDSA
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_ECDSA);
+# endif
+
+# ifdef ENGINE_METHOD_CIPHERS
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_CIPHERS);
+# endif
+
+# ifdef ENGINE_METHOD_DIGESTS
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_DIGESTS);
+# endif
+
+# ifdef ENGINE_METHOD_STORE
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_STORE);
+# endif
+
+# ifdef ENGINE_METHOD_PKEY_METHS
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_PKEY_METHS);
+# endif
+
+# ifdef ENGINE_METHOD_PKEY_ASN1_METHS
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_PKEY_ASN1_METHS);
+# endif
+
+# ifdef ENGINE_METHOD_ALL
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_ALL);
+# endif
+
+# ifdef ENGINE_METHOD_NONE
+    NODE_DEFINE_CONSTANT(target, ENGINE_METHOD_NONE);
+# endif
+
+# endif  // !OPENSSL_NO_ENGINE
+
+#ifdef DH_CHECK_P_NOT_SAFE_PRIME
+    NODE_DEFINE_CONSTANT(target, DH_CHECK_P_NOT_SAFE_PRIME);
+#endif
+
+#ifdef DH_CHECK_P_NOT_PRIME
+    NODE_DEFINE_CONSTANT(target, DH_CHECK_P_NOT_PRIME);
+#endif
+
+#ifdef DH_UNABLE_TO_CHECK_GENERATOR
+    NODE_DEFINE_CONSTANT(target, DH_UNABLE_TO_CHECK_GENERATOR);
+#endif
+
+#ifdef DH_NOT_SUITABLE_GENERATOR
+    NODE_DEFINE_CONSTANT(target, DH_NOT_SUITABLE_GENERATOR);
+#endif
+
 #ifdef OPENSSL_NPN_NEGOTIATED
 #define NPN_ENABLED 1
     NODE_DEFINE_CONSTANT(target, NPN_ENABLED);
+#endif
+
+#ifdef RSA_PKCS1_PADDING
+    NODE_DEFINE_CONSTANT(target, RSA_PKCS1_PADDING);
+#endif
+
+#ifdef RSA_SSLV23_PADDING
+    NODE_DEFINE_CONSTANT(target, RSA_SSLV23_PADDING);
+#endif
+
+#ifdef RSA_NO_PADDING
+    NODE_DEFINE_CONSTANT(target, RSA_NO_PADDING);
+#endif
+
+#ifdef RSA_PKCS1_OAEP_PADDING
+    NODE_DEFINE_CONSTANT(target, RSA_PKCS1_OAEP_PADDING);
+#endif
+
+#ifdef RSA_X931_PADDING
+    NODE_DEFINE_CONSTANT(target, RSA_X931_PADDING);
+#endif
+
+#ifdef RSA_PKCS1_PSS_PADDING
+    NODE_DEFINE_CONSTANT(target, RSA_PKCS1_PSS_PADDING);
+#endif
+
+#if HAVE_OPENSSL
+  // NOTE: These are not defines
+  NODE_DEFINE_CONSTANT(target, POINT_CONVERSION_COMPRESSED);
+
+  NODE_DEFINE_CONSTANT(target, POINT_CONVERSION_UNCOMPRESSED);
+
+  NODE_DEFINE_CONSTANT(target, POINT_CONVERSION_HYBRID);
 #endif
 }
 
@@ -951,6 +1056,10 @@ void DefineSystemConstants(Handle<Object> target) {
   NODE_DEFINE_CONSTANT(target, O_DIRECT);
 #endif
 
+#ifdef O_NONBLOCK
+  NODE_DEFINE_CONSTANT(target, O_NONBLOCK);
+#endif
+
 #ifdef S_IRWXU
   NODE_DEFINE_CONSTANT(target, S_IRWXU);
 #endif
@@ -1000,12 +1109,17 @@ void DefineSystemConstants(Handle<Object> target) {
 #endif
 }
 
+void DefineUVConstants(Handle<Object> target) {
+  NODE_DEFINE_CONSTANT(target, UV_UDP_REUSEADDR);
+}
+
 void DefineConstants(Handle<Object> target) {
   DefineErrnoConstants(target);
   DefineWindowsErrorConstants(target);
   DefineSignalConstants(target);
   DefineOpenSSLConstants(target);
   DefineSystemConstants(target);
+  DefineUVConstants(target);
 }
 
 }  // namespace node

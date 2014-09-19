@@ -34,6 +34,7 @@
 #include "uv.h"
 #include "internal.h"
 #include "req-inl.h"
+#include "handle-inl.h"
 
 
 #define UV_FS_FREE_PATHS         0x0002
@@ -43,12 +44,8 @@
 
 #define QUEUE_FS_TP_JOB(loop, req)                                          \
   do {                                                                      \
-    if (!QueueUserWorkItem(&uv_fs_thread_proc,                              \
-                           req,                                             \
-                           WT_EXECUTEDEFAULT)) {                            \
-      return uv_translate_sys_error(GetLastError());                        \
-    }                                                                       \
     uv__req_register(loop, req);                                            \
+    uv__work_submit((loop), &(req)->work_req, uv__fs_work, uv__fs_done);    \
   } while (0)
 
 #define SET_REQ_RESULT(req, result_value)                                   \
@@ -96,8 +93,10 @@
 
 #define TIME_T_TO_FILETIME(time, filetime_ptr)                              \
   do {                                                                      \
-    *(uint64_t*) (filetime_ptr) = ((int64_t) (time) * 10000000LL) +         \
+    uint64_t bigtime = ((int64_t) (time) * 10000000LL) +                    \
                                   116444736000000000ULL;                    \
+    (filetime_ptr)->dwLowDateTime = bigtime & 0xFFFFFFFF;                   \
+    (filetime_ptr)->dwHighDateTime = bigtime >> 32;                         \
   } while(0)
 
 #define IS_SLASH(c) ((c) == L'\\' || (c) == L'/')
@@ -120,7 +119,7 @@ INLINE static int fs__capture_path(uv_loop_t* loop, uv_fs_t* req,
     const char* path, const char* new_path, const int copy_path) {
   char* buf;
   char* pos;
-  ssize_t buf_sz = 0, path_len, pathw_len, new_pathw_len;
+  ssize_t buf_sz = 0, path_len, pathw_len = 0, new_pathw_len = 0;
 
   /* new_path can only be set if path is also set. */
   assert(new_path == NULL || path != NULL);
@@ -180,7 +179,7 @@ INLINE static int fs__capture_path(uv_loop_t* loop, uv_fs_t* req,
                                   -1,
                                   (WCHAR*) pos,
                                   pathw_len);
-    assert(r == pathw_len);
+    assert(r == (DWORD) pathw_len);
     req->pathw = (WCHAR*) pos;
     pos += r * sizeof(WCHAR);
   } else {
@@ -194,7 +193,7 @@ INLINE static int fs__capture_path(uv_loop_t* loop, uv_fs_t* req,
                                   -1,
                                   (WCHAR*) pos,
                                   new_pathw_len);
-    assert(r == new_pathw_len);
+    assert(r == (DWORD) new_pathw_len);
     req->new_pathw = (WCHAR*) pos;
     pos += r * sizeof(WCHAR);
   } else {
@@ -229,11 +228,7 @@ INLINE static void uv_fs_req_init(uv_loop_t* loop, uv_fs_t* req,
   req->result = 0;
   req->ptr = NULL;
   req->path = NULL;
-
-  if (cb != NULL) {
-    req->cb = cb;
-    memset(&req->overlapped, 0, sizeof(req->overlapped));
-  }
+  req->cb = cb;
 }
 
 
@@ -538,24 +533,21 @@ void fs__close(uv_fs_t* req) {
 
 void fs__read(uv_fs_t* req) {
   int fd = req->fd;
-  size_t length = req->length;
   int64_t offset = req->offset;
   HANDLE handle;
   OVERLAPPED overlapped, *overlapped_ptr;
   LARGE_INTEGER offset_;
   DWORD bytes;
   DWORD error;
+  int result;
+  unsigned int index;
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE) _get_osfhandle(fd);
-  if (handle == INVALID_HANDLE_VALUE) {
-    SET_REQ_RESULT(req, -1);
-    return;
-  }
+  handle = uv__get_osfhandle(fd);
 
-  if (length > INT_MAX) {
-    SET_REQ_WIN32_ERROR(req, ERROR_INSUFFICIENT_BUFFER);
+  if (handle == INVALID_HANDLE_VALUE) {
+    SET_REQ_WIN32_ERROR(req, ERROR_INVALID_HANDLE);
     return;
   }
 
@@ -571,7 +563,20 @@ void fs__read(uv_fs_t* req) {
     overlapped_ptr = NULL;
   }
 
-  if (ReadFile(handle, req->buf, req->length, &bytes, overlapped_ptr)) {
+  index = 0;
+  bytes = 0;
+  do {
+    DWORD incremental_bytes;
+    result = ReadFile(handle,
+                      req->bufs[index].base,
+                      req->bufs[index].len,
+                      &incremental_bytes,
+                      overlapped_ptr);
+    bytes += incremental_bytes;
+    ++index;
+  } while (result && index < req->nbufs);
+
+  if (result || bytes > 0) {
     SET_REQ_RESULT(req, bytes);
   } else {
     error = GetLastError();
@@ -586,23 +591,19 @@ void fs__read(uv_fs_t* req) {
 
 void fs__write(uv_fs_t* req) {
   int fd = req->fd;
-  size_t length = req->length;
   int64_t offset = req->offset;
   HANDLE handle;
   OVERLAPPED overlapped, *overlapped_ptr;
   LARGE_INTEGER offset_;
   DWORD bytes;
+  int result;
+  unsigned int index;
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE) _get_osfhandle(fd);
+  handle = uv__get_osfhandle(fd);
   if (handle == INVALID_HANDLE_VALUE) {
-    SET_REQ_RESULT(req, -1);
-    return;
-  }
-
-  if (length > INT_MAX) {
-    SET_REQ_WIN32_ERROR(req, ERROR_INSUFFICIENT_BUFFER);
+    SET_REQ_WIN32_ERROR(req, ERROR_INVALID_HANDLE);
     return;
   }
 
@@ -618,7 +619,20 @@ void fs__write(uv_fs_t* req) {
     overlapped_ptr = NULL;
   }
 
-  if (WriteFile(handle, req->buf, length, &bytes, overlapped_ptr)) {
+  index = 0;
+  bytes = 0;
+  do {
+    DWORD incremental_bytes;
+    result = WriteFile(handle,
+                       req->bufs[index].base,
+                       req->bufs[index].len,
+                       &incremental_bytes,
+                       overlapped_ptr);
+    bytes += incremental_bytes;
+    ++index;
+  } while (result && index < req->nbufs);
+
+  if (result || bytes > 0) {
     SET_REQ_RESULT(req, bytes);
   } else {
     SET_REQ_WIN32_ERROR(req, GetLastError());
@@ -704,6 +718,78 @@ void fs__mkdir(uv_fs_t* req) {
   /* TODO: use req->mode. */
   int result = _wmkdir(req->pathw);
   SET_REQ_RESULT(req, result);
+}
+
+
+/* Some parts of the implementation were borrowed from glibc. */
+void fs__mkdtemp(uv_fs_t* req) {
+  static const WCHAR letters[] =
+    L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  size_t len;
+  WCHAR* template_part;
+  static uint64_t value;
+  unsigned int count;
+  int fd;
+
+  /* A lower bound on the number of temporary files to attempt to
+     generate. The maximum total number of temporary file names that
+     can exist for a given template is 62**6. It should never be
+     necessary to try all these combinations. Instead if a reasonable
+     number of names is tried (we define reasonable as 62**3) fail to
+     give the system administrator the chance to remove the problems. */
+#define ATTEMPTS_MIN (62 * 62 * 62)
+
+  /* The number of times to attempt to generate a temporary file. To
+     conform to POSIX, this must be no smaller than TMP_MAX. */
+#if ATTEMPTS_MIN < TMP_MAX
+  unsigned int attempts = TMP_MAX;
+#else
+  unsigned int attempts = ATTEMPTS_MIN;
+#endif
+
+  len = wcslen(req->pathw);
+  if (len < 6 || wcsncmp(&req->pathw[len - 6], L"XXXXXX", 6)) {
+    SET_REQ_UV_ERROR(req, UV_EINVAL, ERROR_INVALID_PARAMETER);
+    return;
+  }
+
+  /* This is where the Xs start. */
+  template_part = &req->pathw[len - 6];
+
+  /* Get some random data. */
+  value += uv_hrtime() ^ _getpid();
+
+  for (count = 0; count < attempts; value += 7777, ++count) {
+    uint64_t v = value;
+
+    /* Fill in the random bits. */
+    template_part[0] = letters[v % 62];
+    v /= 62;
+    template_part[1] = letters[v % 62];
+    v /= 62;
+    template_part[2] = letters[v % 62];
+    v /= 62;
+    template_part[3] = letters[v % 62];
+    v /= 62;
+    template_part[4] = letters[v % 62];
+    v /= 62;
+    template_part[5] = letters[v % 62];
+
+    fd = _wmkdir(req->pathw);
+
+    if (fd >= 0) {
+      len = strlen(req->path);
+      wcstombs((char*) req->path + len - 6, template_part, 6);
+      SET_REQ_RESULT(req, 0);
+      return;
+    } else if (errno != EEXIST) {
+      SET_REQ_RESULT(req, -1);
+      return;
+    }
+  }
+
+  /* We got out of the loop because we ran out of combinations to try. */
+  SET_REQ_RESULT(req, -1);
 }
 
 
@@ -841,9 +927,13 @@ INLINE static int fs__stat_handle(HANDLE handle, uv_stat_t* statbuf) {
                                             FileFsVolumeInformation);
 
   /* Buffer overflow (a warning status code) is expected here. */
-  if (NT_ERROR(nt_status)) {
+  if (io_status.Status == STATUS_NOT_IMPLEMENTED) {
+    statbuf->st_dev = 0;
+  } else if (NT_ERROR(nt_status)) {
     SetLastError(pRtlNtStatusToDosError(nt_status));
     return -1;
+  } else {
+    statbuf->st_dev = volume_info.VolumeSerialNumber;
   }
 
   /* Todo: st_mode should probably always be 0666 for everyone. We might also
@@ -899,8 +989,6 @@ INLINE static int fs__stat_handle(HANDLE handle, uv_stat_t* statbuf) {
       file_info.StandardInformation.AllocationSize.QuadPart >> 9ULL;
 
   statbuf->st_nlink = file_info.StandardInformation.NumberOfLinks;
-
-  statbuf->st_dev = volume_info.VolumeSerialNumber;
 
   /* The st_blksize is supposed to be the 'optimal' number of bytes for reading
    * and writing to the disk. That is, for any definition of 'optimal' - it's
@@ -1004,7 +1092,7 @@ static void fs__fstat(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE) _get_osfhandle(fd);
+  handle = uv__get_osfhandle(fd);
 
   if (handle == INVALID_HANDLE_VALUE) {
     SET_REQ_WIN32_ERROR(req, ERROR_INVALID_HANDLE);
@@ -1037,7 +1125,7 @@ INLINE static void fs__sync_impl(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  result = FlushFileBuffers((HANDLE) _get_osfhandle(fd)) ? 0 : -1;
+  result = FlushFileBuffers(uv__get_osfhandle(fd)) ? 0 : -1;
   if (result == -1) {
     SET_REQ_WIN32_ERROR(req, GetLastError());
   } else {
@@ -1065,7 +1153,7 @@ static void fs__ftruncate(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE)_get_osfhandle(fd);
+  handle = uv__get_osfhandle(fd);
 
   eof_info.EndOfFile.QuadPart = req->offset;
 
@@ -1085,7 +1173,7 @@ static void fs__ftruncate(uv_fs_t* req) {
 
 static void fs__sendfile(uv_fs_t* req) {
   int fd_in = req->fd, fd_out = req->fd_out;
-  size_t length = req->length;
+  size_t length = req->bufsml[0].len;
   int64_t offset = req->offset;
   const size_t max_buf_size = 65536;
   size_t buf_size = length < max_buf_size ? length : max_buf_size;
@@ -1145,7 +1233,7 @@ static void fs__fchmod(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE) _get_osfhandle(fd);
+  handle = uv__get_osfhandle(fd);
 
   nt_status = pNtQueryInformationFile(handle,
                                       &io_status,
@@ -1226,7 +1314,7 @@ static void fs__futime(uv_fs_t* req) {
   HANDLE handle;
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE) _get_osfhandle(fd);
+  handle = uv__get_osfhandle(fd);
 
   if (handle == INVALID_HANDLE_VALUE) {
     SET_REQ_WIN32_ERROR(req, ERROR_INVALID_HANDLE);
@@ -1281,23 +1369,23 @@ static void fs__create_junction(uv_fs_t* req, const WCHAR* path,
     return;
   }
 
-  // Do a pessimistic calculation of the required buffer size
+  /* Do a pessimistic calculation of the required buffer size */
   needed_buf_size =
       FIELD_OFFSET(REPARSE_DATA_BUFFER, MountPointReparseBuffer.PathBuffer) +
       JUNCTION_PREFIX_LEN * sizeof(WCHAR) +
       2 * (target_len + 2) * sizeof(WCHAR);
 
-  // Allocate the buffer
+  /* Allocate the buffer */
   buffer = (REPARSE_DATA_BUFFER*)malloc(needed_buf_size);
   if (!buffer) {
     uv_fatal_error(ERROR_OUTOFMEMORY, "malloc");
   }
 
-  // Grab a pointer to the part of the buffer where filenames go
+  /* Grab a pointer to the part of the buffer where filenames go */
   path_buf = (WCHAR*)&(buffer->MountPointReparseBuffer.PathBuffer);
   path_buf_len = 0;
 
-  // Copy the substitute (internal) target path
+  /* Copy the substitute (internal) target path */
   start = path_buf_len;
 
   wcsncpy((WCHAR*)&path_buf[path_buf_len], JUNCTION_PREFIX,
@@ -1321,14 +1409,14 @@ static void fs__create_junction(uv_fs_t* req, const WCHAR* path,
   path_buf[path_buf_len++] = L'\\';
   len = path_buf_len - start;
 
-  // Set the info about the substitute name
+  /* Set the info about the substitute name */
   buffer->MountPointReparseBuffer.SubstituteNameOffset = start * sizeof(WCHAR);
   buffer->MountPointReparseBuffer.SubstituteNameLength = len * sizeof(WCHAR);
 
-  // Insert null terminator
+  /* Insert null terminator */
   path_buf[path_buf_len++] = L'\0';
 
-  // Copy the print name of the target path
+  /* Copy the print name of the target path */
   start = path_buf_len;
   add_slash = 0;
   for (i = is_long_path ? LONG_PATH_PREFIX_LEN : 0; path[i] != L'\0'; i++) {
@@ -1350,34 +1438,34 @@ static void fs__create_junction(uv_fs_t* req, const WCHAR* path,
     len++;
   }
 
-  // Set the info about the print name
+  /* Set the info about the print name */
   buffer->MountPointReparseBuffer.PrintNameOffset = start * sizeof(WCHAR);
   buffer->MountPointReparseBuffer.PrintNameLength = len * sizeof(WCHAR);
 
-  // Insert another null terminator
+  /* Insert another null terminator */
   path_buf[path_buf_len++] = L'\0';
 
-  // Calculate how much buffer space was actually used
+  /* Calculate how much buffer space was actually used */
   used_buf_size = FIELD_OFFSET(REPARSE_DATA_BUFFER, MountPointReparseBuffer.PathBuffer) +
     path_buf_len * sizeof(WCHAR);
   used_data_size = used_buf_size -
     FIELD_OFFSET(REPARSE_DATA_BUFFER, MountPointReparseBuffer);
 
-  // Put general info in the data buffer
+  /* Put general info in the data buffer */
   buffer->ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
   buffer->ReparseDataLength = used_data_size;
   buffer->Reserved = 0;
 
-  // Create a new directory
+  /* Create a new directory */
   if (!CreateDirectoryW(new_path, NULL)) {
     SET_REQ_WIN32_ERROR(req, GetLastError());
     goto error;
   }
   created = 1;
 
-  // Open the directory
+  /* Open the directory */
   handle = CreateFileW(new_path,
-                       GENERIC_ALL,
+                       GENERIC_WRITE,
                        0,
                        NULL,
                        OPEN_EXISTING,
@@ -1389,7 +1477,7 @@ static void fs__create_junction(uv_fs_t* req, const WCHAR* path,
     goto error;
   }
 
-  // Create the actual reparse point
+  /* Create the actual reparse point */
   if (!DeviceIoControl(handle,
                        FSCTL_SET_REPARSE_POINT,
                        buffer,
@@ -1402,7 +1490,7 @@ static void fs__create_junction(uv_fs_t* req, const WCHAR* path,
     goto error;
   }
 
-  // Clean up
+  /* Clean up */
   CloseHandle(handle);
   free(buffer);
 
@@ -1486,11 +1574,10 @@ static void fs__fchown(uv_fs_t* req) {
 }
 
 
-static DWORD WINAPI uv_fs_thread_proc(void* parameter) {
-  uv_fs_t* req = (uv_fs_t*) parameter;
-  uv_loop_t* loop = req->loop;
+static void uv__fs_work(struct uv__work* w) {
+  uv_fs_t* req;
 
-  assert(req != NULL);
+  req = container_of(w, uv_fs_t, work_req);
   assert(req->type == UV_FS);
 
 #define XX(uc, lc)  case UV_FS_##uc: fs__##lc(req); break;
@@ -1513,6 +1600,7 @@ static DWORD WINAPI uv_fs_thread_proc(void* parameter) {
     XX(UNLINK, unlink)
     XX(RMDIR, rmdir)
     XX(MKDIR, mkdir)
+    XX(MKDTEMP, mkdtemp)
     XX(RENAME, rename)
     XX(READDIR, readdir)
     XX(LINK, link)
@@ -1523,9 +1611,41 @@ static DWORD WINAPI uv_fs_thread_proc(void* parameter) {
     default:
       assert(!"bad uv_fs_type");
   }
+}
 
-  POST_COMPLETION_FOR_REQ(loop, req);
-  return 0;
+
+static void uv__fs_done(struct uv__work* w, int status) {
+  uv_fs_t* req;
+
+  req = container_of(w, uv_fs_t, work_req);
+  uv__req_unregister(req->loop, req);
+
+  if (status == UV_ECANCELED) {
+    assert(req->result == 0);
+    req->result = UV_ECANCELED;
+  }
+
+  if (req->cb != NULL)
+    req->cb(req);
+}
+
+
+void uv_fs_req_cleanup(uv_fs_t* req) {
+  if (req->flags & UV_FS_CLEANEDUP)
+    return;
+
+  if (req->flags & UV_FS_FREE_PATHS)
+    free(req->pathw);
+
+  if (req->flags & UV_FS_FREE_PTR)
+    free(req->ptr);
+
+  req->path = NULL;
+  req->pathw = NULL;
+  req->new_pathw = NULL;
+  req->ptr = NULL;
+
+  req->flags |= UV_FS_CLEANEDUP;
 }
 
 
@@ -1567,13 +1687,27 @@ int uv_fs_close(uv_loop_t* loop, uv_fs_t* req, uv_file fd, uv_fs_cb cb) {
 }
 
 
-int uv_fs_read(uv_loop_t* loop, uv_fs_t* req, uv_file fd, void* buf,
-    size_t length, int64_t offset, uv_fs_cb cb) {
+int uv_fs_read(uv_loop_t* loop,
+               uv_fs_t* req,
+               uv_file fd,
+               const uv_buf_t bufs[],
+               unsigned int nbufs,
+               int64_t offset,
+               uv_fs_cb cb) {
   uv_fs_req_init(loop, req, UV_FS_READ, cb);
 
   req->fd = fd;
-  req->buf = buf;
-  req->length = length;
+
+  req->nbufs = nbufs;
+  req->bufs = req->bufsml;
+  if (nbufs > ARRAY_SIZE(req->bufsml))
+    req->bufs = malloc(nbufs * sizeof(*bufs));
+
+  if (req->bufs == NULL)
+    return UV_ENOMEM;
+
+  memcpy(req->bufs, bufs, nbufs * sizeof(*bufs));
+
   req->offset = offset;
 
   if (cb) {
@@ -1586,13 +1720,27 @@ int uv_fs_read(uv_loop_t* loop, uv_fs_t* req, uv_file fd, void* buf,
 }
 
 
-int uv_fs_write(uv_loop_t* loop, uv_fs_t* req, uv_file fd, const void* buf,
-    size_t length, int64_t offset, uv_fs_cb cb) {
+int uv_fs_write(uv_loop_t* loop,
+                uv_fs_t* req,
+                uv_file fd,
+                const uv_buf_t bufs[],
+                unsigned int nbufs,
+                int64_t offset,
+                uv_fs_cb cb) {
   uv_fs_req_init(loop, req, UV_FS_WRITE, cb);
 
   req->fd = fd;
-  req->buf = (void*) buf;
-  req->length = length;
+
+  req->nbufs = nbufs;
+  req->bufs = req->bufsml;
+  if (nbufs > ARRAY_SIZE(req->bufsml))
+    req->bufs = malloc(nbufs * sizeof(*bufs));
+
+  if (req->bufs == NULL)
+    return UV_ENOMEM;
+
+  memcpy(req->bufs, bufs, nbufs * sizeof(*bufs));
+
   req->offset = offset;
 
   if (cb) {
@@ -1644,6 +1792,26 @@ int uv_fs_mkdir(uv_loop_t* loop, uv_fs_t* req, const char* path, int mode,
     return 0;
   } else {
     fs__mkdir(req);
+    return req->result;
+  }
+}
+
+
+int uv_fs_mkdtemp(uv_loop_t* loop, uv_fs_t* req, const char* tpl,
+    uv_fs_cb cb) {
+  int err;
+
+  uv_fs_req_init(loop, req, UV_FS_MKDTEMP, cb);
+
+  err = fs__capture_path(loop, req, tpl, NULL, TRUE);
+  if (err)
+    return uv_translate_sys_error(err);
+
+  if (cb) {
+    QUEUE_FS_TP_JOB(loop, req);
+    return 0;
+  } else {
+    fs__mkdtemp(req);
     return req->result;
   }
 }
@@ -1920,7 +2088,7 @@ int uv_fs_sendfile(uv_loop_t* loop, uv_fs_t* req, uv_file fd_out,
   req->fd = fd_in;
   req->fd_out = fd_out;
   req->offset = in_offset;
-  req->length = length;
+  req->bufsml[0].len = length;
 
   if (cb) {
     QUEUE_FS_TP_JOB(loop, req);
@@ -2012,30 +2180,3 @@ int uv_fs_futime(uv_loop_t* loop, uv_fs_t* req, uv_file fd, double atime,
     return req->result;
   }
 }
-
-
-void uv_process_fs_req(uv_loop_t* loop, uv_fs_t* req) {
-  assert(req->cb);
-  uv__req_unregister(loop, req);
-  req->cb(req);
-}
-
-
-void uv_fs_req_cleanup(uv_fs_t* req) {
-  if (req->flags & UV_FS_CLEANEDUP)
-    return;
-
-  if (req->flags & UV_FS_FREE_PATHS)
-    free(req->pathw);
-
-  if (req->flags & UV_FS_FREE_PTR)
-    free(req->ptr);
-
-  req->path = NULL;
-  req->pathw = NULL;
-  req->new_pathw = NULL;
-  req->ptr = NULL;
-
-  req->flags |= UV_FS_CLEANEDUP;
-}
-

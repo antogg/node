@@ -27,6 +27,7 @@
 #include <assert.h>
 #include <stdlib.h> /* abort */
 #include <string.h> /* strrchr */
+#include <fcntl.h>  /* O_CLOEXEC, may be */
 
 #if defined(__STRICT_ANSI__)
 # define inline __inline
@@ -40,6 +41,12 @@
 # include <sys/port.h>
 # include <port.h>
 #endif /* __sun */
+
+#if defined(_AIX)
+#define reqevents events
+#define rtnevents revents
+#include <sys/poll.h>
+#endif /* _AIX */
 
 #if defined(__APPLE__) && !TARGET_OS_IPHONE
 # include <CoreServices/CoreServices.h>
@@ -88,7 +95,7 @@
 # define UV__POLLHUP  UV__EPOLLHUP
 #endif
 
-#if defined(__sun)
+#if defined(__sun) || defined(_AIX)
 # define UV__POLLIN   POLLIN
 # define UV__POLLOUT  POLLOUT
 # define UV__POLLERR  POLLERR
@@ -111,6 +118,16 @@
 # define UV__POLLHUP  8
 #endif
 
+#if !defined(O_CLOEXEC) && defined(__FreeBSD__)
+/*
+ * It may be that we are just missing `__POSIX_VISIBLE >= 200809`.
+ * Try using fixed value const and give up, if it doesn't work
+ */
+# define O_CLOEXEC 0x00100000
+#endif
+
+typedef struct uv__stream_queued_fds_s uv__stream_queued_fds_t;
+
 /* handle flags */
 enum {
   UV_CLOSING              = 0x01,   /* uv_close() called but not finished. */
@@ -125,13 +142,21 @@ enum {
   UV_STREAM_READ_EOF      = 0x200,  /* read(2) read EOF. */
   UV_TCP_NODELAY          = 0x400,  /* Disable Nagle. */
   UV_TCP_KEEPALIVE        = 0x800,  /* Turn on keep-alive. */
-  UV_TCP_SINGLE_ACCEPT    = 0x1000  /* Only accept() when idle. */
+  UV_TCP_SINGLE_ACCEPT    = 0x1000, /* Only accept() when idle. */
+  UV_HANDLE_IPV6          = 0x2000  /* Handle is bound to a IPv6 socket. */
 };
 
 typedef enum {
   UV_CLOCK_PRECISE = 0,  /* Use the highest resolution clock available. */
   UV_CLOCK_FAST = 1      /* Use the fastest clock with <= 1ms granularity. */
 } uv_clocktype_t;
+
+struct uv__stream_queued_fds_s {
+  unsigned int size;
+  unsigned int offset;
+  int fds[1];
+};
+
 
 /* core */
 int uv__nonblock(int fd, int set);
@@ -171,6 +196,8 @@ int uv__stream_try_select(uv_stream_t* stream, int* fd);
 #endif /* defined(__APPLE__) */
 void uv__server_io(uv_loop_t* loop, uv__io_t* w, unsigned int events);
 int uv__accept(int sockfd);
+int uv__dup2_cloexec(int oldfd, int newfd);
+int uv__open_cloexec(const char* path, int flags);
 
 /* tcp */
 int uv_tcp_listen(uv_tcp_t* tcp, int backlog, uv_connection_cb cb);
@@ -188,13 +215,6 @@ int uv__next_timeout(const uv_loop_t* loop);
 void uv__signal_close(uv_signal_t* handle);
 void uv__signal_global_once_init(void);
 void uv__signal_loop_cleanup(uv_loop_t* loop);
-
-/* thread pool */
-void uv__work_submit(uv_loop_t* loop,
-                     struct uv__work *w,
-                     void (*work)(struct uv__work *w),
-                     void (*done)(struct uv__work *w, int status));
-void uv__work_done(uv_async_t* handle, int status);
 
 /* platform specific */
 uint64_t uv__hrtime(uv_clocktype_t type);
@@ -217,10 +237,11 @@ void uv__tcp_close(uv_tcp_t* handle);
 void uv__timer_close(uv_timer_t* handle);
 void uv__udp_close(uv_udp_t* handle);
 void uv__udp_finish_close(uv_udp_t* handle);
+uv_handle_type uv__handle_type(int fd);
 
 #if defined(__APPLE__)
-int uv___stream_fd(uv_stream_t* handle);
-#define uv__stream_fd(handle) (uv___stream_fd((uv_stream_t*) (handle)))
+int uv___stream_fd(const uv_stream_t* handle);
+#define uv__stream_fd(handle) (uv___stream_fd((const uv_stream_t*) (handle)))
 #else
 #define uv__stream_fd(handle) ((handle)->io_watcher.fd)
 #endif /* defined(__APPLE__) */

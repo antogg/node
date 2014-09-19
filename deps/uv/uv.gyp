@@ -31,7 +31,7 @@
   'targets': [
     {
       'target_name': 'libuv',
-      'type': '<(library)',
+      'type': '<(uv_library)',
       'include_dirs': [
         'include',
         'src/',
@@ -61,9 +61,13 @@
         'include/uv.h',
         'include/tree.h',
         'include/uv-errno.h',
+        'include/uv-threadpool.h',
+        'include/uv-version.h',
         'src/fs-poll.c',
+        'src/heap-inl.h',
         'src/inet.c',
         'src/queue.h',
+        'src/threadpool.c',
         'src/uv-common.c',
         'src/uv-common.h',
         'src/version.c'
@@ -84,6 +88,7 @@
             'src/win/fs.c',
             'src/win/fs-event.c',
             'src/win/getaddrinfo.c',
+            'src/win/getnameinfo.c',
             'src/win/handle.c',
             'src/win/handle-inl.h',
             'src/win/internal.h',
@@ -100,7 +105,6 @@
             'src/win/stream-inl.h',
             'src/win/tcp.c',
             'src/win/tty.c',
-            'src/win/threadpool.c',
             'src/win/timer.c',
             'src/win/udp.c',
             'src/win/util.c',
@@ -111,11 +115,11 @@
           ],
           'link_settings': {
             'libraries': [
-              '-ladvapi32.lib',
-              '-liphlpapi.lib',
-              '-lpsapi.lib',
-              '-lshell32.lib',
-              '-lws2_32.lib'
+              '-ladvapi32',
+              '-liphlpapi',
+              '-lpsapi',
+              '-lshell32',
+              '-lws2_32'
             ],
           },
         }, { # Not Windows i.e. POSIX
@@ -133,12 +137,14 @@
             'include/uv-sunos.h',
             'include/uv-darwin.h',
             'include/uv-bsd.h',
+            'include/uv-aix.h',
             'src/unix/async.c',
             'src/unix/atomic-ops.h',
             'src/unix/core.c',
             'src/unix/dl.c',
             'src/unix/fs.c',
             'src/unix/getaddrinfo.c',
+            'src/unix/getnameinfo.c',
             'src/unix/internal.h',
             'src/unix/loop.c',
             'src/unix/loop-watcher.c',
@@ -150,7 +156,6 @@
             'src/unix/stream.c',
             'src/unix/tcp.c',
             'src/unix/thread.c',
-            'src/unix/threadpool.c',
             'src/unix/timer.c',
             'src/unix/tty.c',
             'src/unix/udp.c',
@@ -167,10 +172,10 @@
             ],
           },
           'conditions': [
-            ['library=="shared_library"', {
+            ['uv_library=="shared_library"', {
               'cflags': [ '-fPIC' ],
             }],
-            ['library=="shared_library" and OS!="mac"', {
+            ['uv_library=="shared_library" and OS!="mac"', {
               'link_settings': {
                 # Must correspond with UV_VERSION_MAJOR and UV_VERSION_MINOR
                 # in src/version.c
@@ -215,6 +220,7 @@
             'src/unix/linux-syscalls.c',
             'src/unix/linux-syscalls.h',
             'src/unix/pthread-fixes.c',
+            'src/unix/android-ifaddrs.c'
           ],
           'link_settings': {
             'libraries': [ '-ldl' ],
@@ -236,11 +242,11 @@
           },
         }],
         [ 'OS=="aix"', {
-          'include_dirs': [ 'src/ares/config_aix' ],
           'sources': [ 'src/unix/aix.c' ],
           'defines': [
             '_ALL_SOURCE',
             '_XOPEN_SOURCE=500',
+            '_LINUX_SOURCE_COMPAT',
           ],
           'link_settings': {
             'libraries': [
@@ -265,7 +271,7 @@
         [ 'OS in "mac freebsd dragonflybsd openbsd netbsd".split()', {
           'sources': [ 'src/unix/kqueue.c' ],
         }],
-        ['library=="shared_library"', {
+        ['uv_library=="shared_library"', {
           'defines': [ 'BUILDING_UV_SHARED=1' ]
         }],
         # FIXME(bnoordhuis or tjfontaine) Unify this, it's extremely ugly.
@@ -316,13 +322,17 @@
         'test/test-get-currentexe.c',
         'test/test-get-memory.c',
         'test/test-getaddrinfo.c',
+        'test/test-getnameinfo.c',
         'test/test-getsockname.c',
         'test/test-hrtime.c',
         'test/test-idle.c',
+        'test/test-ip6-addr.c',
         'test/test-ipc.c',
         'test/test-ipc-send-recv.c',
         'test/test-list.h',
         'test/test-loop-handles.c',
+        'test/test-loop-alive.c',
+        'test/test-loop-close.c',
         'test/test-loop-stop.c',
         'test/test-loop-time.c',
         'test/test-walk-handles.c',
@@ -333,9 +343,13 @@
         'test/test-ping-pong.c',
         'test/test-pipe-bind-error.c',
         'test/test-pipe-connect-error.c',
+        'test/test-pipe-getsockname.c',
+        'test/test-pipe-sendmsg.c',
+        'test/test-pipe-server-close.c',
         'test/test-platform-output.c',
         'test/test-poll.c',
         'test/test-poll-close.c',
+        'test/test-poll-closesocket.c',
         'test/test-process-title.c',
         'test/test-ref.c',
         'test/test-run-nowait.c',
@@ -343,6 +357,7 @@
         'test/test-semaphore.c',
         'test/test-shutdown-close.c',
         'test/test-shutdown-eof.c',
+        'test/test-shutdown-twice.c',
         'test/test-signal.c',
         'test/test-signal-multiple-loops.c',
         'test/test-spawn.c',
@@ -365,6 +380,7 @@
         'test/test-tcp-try-write.c',
         'test/test-tcp-unexpected-read.c',
         'test/test-tcp-read-stop.c',
+        'test/test-tcp-write-queue-order.c',
         'test/test-threadpool.c',
         'test/test-threadpool-cancel.c',
         'test/test-mutexes.c',
@@ -375,16 +391,22 @@
         'test/test-timer-from-check.c',
         'test/test-timer.c',
         'test/test-tty.c',
+        'test/test-udp-bind.c',
         'test/test-udp-dgram-too-big.c',
         'test/test-udp-ipv6.c',
         'test/test-udp-open.c',
         'test/test-udp-options.c',
         'test/test-udp-send-and-recv.c',
+        'test/test-udp-send-immediate.c',
         'test/test-udp-multicast-join.c',
+        'test/test-udp-multicast-join6.c',
         'test/test-dlerror.c',
         'test/test-udp-multicast-ttl.c',
         'test/test-ip4-addr.c',
         'test/test-ip6-addr.c',
+        'test/test-udp-multicast-interface.c',
+        'test/test-udp-multicast-interface6.c',
+        'test/test-udp-try-send.c',
       ],
       'conditions': [
         [ 'OS=="win"', {
@@ -392,7 +414,7 @@
             'test/runner-win.c',
             'test/runner-win.h'
           ],
-          'libraries': [ 'ws2_32.lib' ]
+          'libraries': [ '-lws2_32' ]
         }, { # POSIX
           'defines': [ '_GNU_SOURCE' ],
           'sources': [
@@ -456,7 +478,7 @@
             'test/runner-win.c',
             'test/runner-win.h',
           ],
-          'libraries': [ 'ws2_32.lib' ]
+          'libraries': [ '-lws2_32' ]
         }, { # POSIX
           'defines': [ '_GNU_SOURCE' ],
           'sources': [

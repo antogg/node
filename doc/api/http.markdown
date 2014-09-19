@@ -619,13 +619,15 @@ To configure any of them, you must create your own `Agent` object.
 ```javascript
 var http = require('http');
 var keepAliveAgent = new http.Agent({ keepAlive: true });
-keepAliveAgent.request(options, onResponseCallback);
+options.agent = keepAliveAgent;
+http.request(options, onResponseCallback);
 ```
 
 ### agent.maxSockets
 
-By default set to Infinity. Determines how many concurrent sockets the
-agent can have open per host.
+By default set to Infinity. Determines how many concurrent sockets the agent
+can have open per origin. Origin is either a 'host:port' or
+'host:port:localAddress' combination.
 
 ### agent.maxFreeSockets
 
@@ -704,7 +706,7 @@ which has been transmitted are equal or not.
 The request implements the [Writable Stream][] interface. This is an
 [EventEmitter][] with the following events:
 
-### Event 'response'
+### Event: 'response'
 
 `function (response) { }`
 
@@ -842,6 +844,18 @@ A client server pair that show you how to listen for the `upgrade` event.
 Emitted when the server sends a '100 Continue' HTTP response, usually because
 the request contained 'Expect: 100-continue'. This is an instruction that
 the client should send the request body.
+
+### request.flush()
+
+Flush the request headers.
+
+For efficiency reasons, node.js normally buffers the request headers until you
+call `request.end()` or write the first chunk of request data.  It then tries
+hard to pack the request headers and data into a single TCP packet.
+
+That's usually what you want (it saves a TCP round-trip) but not when the first
+data isn't sent until possibly much later.  `request.flush()` lets you bypass
+the optimization and kickstart the request.
 
 ### request.write(chunk, [encoding])
 
@@ -1011,6 +1025,12 @@ you can use the `require('querystring').parse` function, or pass
 
 The 3-digit HTTP response status code. E.G. `404`.
 
+### message.statusMessage
+
+**Only valid for response obtained from `http.ClientRequest`.**
+
+The HTTP response status message (reason phrase). E.G. `OK` or `Internal Server Error`.
+
 ### message.socket
 
 The `net.Socket` object associated with the connection.
@@ -1026,8 +1046,8 @@ authentication details.
 [Agent]: #http_class_http_agent
 [Buffer]: buffer.html#buffer_buffer
 [EventEmitter]: events.html#events_class_events_eventemitter
-[Readable Stream]: stream.html#stream_readable_stream
-[Writable Stream]: stream.html#stream_writable_stream
+[Readable Stream]: stream.html#stream_class_stream_readable
+[Writable Stream]: stream.html#stream_class_stream_writable
 [global Agent]: #http_http_globalagent
 [http.ClientRequest]: #http_class_http_clientrequest
 [http.IncomingMessage]: #http_http_incomingmessage
